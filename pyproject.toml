@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "commit_digest"
+version = "0.1.0"
+description = "Extract commit info from Git repositories and optionally summarize them using OpenAI."
+authors = ["plutopulp <plutopulped@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+typer = "^0.15.1"
+openai = "^1.64.0"
+
+
+[tool.poetry.group.dev.dependencies]
+black = "^25.1.0"
+isort = "^6.0.0"
+flake8 = "^7.1.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
