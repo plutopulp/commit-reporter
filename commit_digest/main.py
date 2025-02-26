@@ -1,204 +1,91 @@
 import logging
 import os
-import re
-import subprocess
-import datetime
-from dataclasses import dataclass, field
-from typing import List, Optional
 
-import openai
 import typer
-from dotenv import load_dotenv
-from openai import OpenAI
 
-# Load environment variables from .env file.
-load_dotenv()
-
-# Retrieve the API key from the environment variables.
-openai.api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI()
+from .file_writer import create_run_directory, write_file_with_metadata
+from .git_utils import Repository, extract_commits
+from .settings import settings
+from .summariser import summarise_commits
 
 app = typer.Typer()
-
-# Set up basic logging.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-# Global constants for model and prompt.
-MODEL_USED = "gpt-4-turbo"
-SYSTEM_PROMPT = (
-    "You are an expert software engineer and technical communicator. Your task is to analyze a series of git commit logs "
-    "and generate a clear, concise, and insightful summary. Focus on extracting the major changes, key improvements, and any recurring themes. "
-    "If multiple repositories or dates are included, group the insights accordingly. Avoid unnecessary low-level details, "
-    "and ensure the summary is actionable for both technical and business audiences."
-)
-USER_PROMPT = (
-    "Please summarize the following commit logs:\n\n{commit_text}\n\n"
-    "The summary should include an overall overview and a bullet-point list of key changes, highlighting new features, bug fixes, "
-    "refactorings, and any breaking changes."
-)
-# Combined prompt text for metadata output.
-PROMPT_USED_FOR_OUTPUT = f"System Prompt: {SYSTEM_PROMPT}\n\nUser Prompt: {USER_PROMPT}"
-
-# Custom exceptions for Git-related errors.
-class GitRepoError(Exception):
-    """Raised when a Git repository is not found or accessible."""
-    pass
-
-class CommitExtractionError(Exception):
-    """Raised when there is an error extracting commit data."""
-    pass
-
-# Dataclasses to structure commit and repository data.
-@dataclass
-class Commit:
-    commit_hash: str
-    author: str
-    date: str
-    message: str
-
-@dataclass
-class Repository:
-    path: str
-    commits: List[Commit] = field(default_factory=list)
-
-def find_git_repos(directory: str) -> List[str]:
-    """
-    Recursively search for Git repositories within the given directory.
-    A repository is detected if a folder contains a '.git' subdirectory.
-    """
-    repos = []
-    for root, dirs, _ in os.walk(directory):
-        if ".git" in dirs:
-            repos.append(root)
-            # Skip subdirectories within the repository.
-            dirs[:] = []
-    if not repos:
-        logging.warning(f"No Git repositories found in {directory}")
-    return repos
-
-def extract_commits(repo_path: str, authors: Optional[List[str]] = None) -> List[Commit]:
-    """
-    Extract commit logs from a Git repository.
-    Optionally filter commits by a list of author names.
-    """
-    cmd = ["git", "-C", repo_path, "log", "--pretty=format:%h | %an | %ad | %s"]
-    if authors:
-        author_pattern = r"\|".join(re.escape(author) for author in authors)
-        cmd.extend(["--author", author_pattern])
-    try:
-        output = subprocess.check_output(
-            cmd, universal_newlines=True, stderr=subprocess.STDOUT
-        )
-    except subprocess.CalledProcessError as e:
-        raise CommitExtractionError(
-            f"Failed to extract commits for repo {repo_path}. Error: {e.output}"
-        )
-
-    commits = []
-    if output:
-        for line in output.splitlines():
-            parts = line.split(" | ")
-            if len(parts) >= 4:
-                commit_hash = parts[0]
-                author = parts[1]
-                date = parts[2]
-                message = " | ".join(parts[3:])
-                commits.append(Commit(commit_hash, author, date, message))
-    return commits
-
-def process_directories(directories: List[str], authors: Optional[List[str]] = None) -> List[Repository]:
-    """
-    Process a list of directories, extract commit logs from all found Git repositories,
-    and structure them into Repository objects.
-    """
-    repositories = []
-    for directory in directories:
-        repos = find_git_repos(directory)
-        for repo_path in repos:
-            try:
-                commits = extract_commits(repo_path, authors)
-                repositories.append(Repository(path=repo_path, commits=commits))
-            except CommitExtractionError as ce:
-                logging.error(ce)
-    return repositories
-
-def summarize_commits(commit_text: str) -> str:
-    """
-    Query an OpenAI model to summarize the essential points from commit logs.
-    """
-    try:
-        response = client.chat.completions.create(
-            model=MODEL_USED,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": USER_PROMPT.format(commit_text=commit_text)},
-            ],
-            temperature=0.5,
-            max_tokens=500,
-        )
-        summary = response.choices[0].message.content
-        return summary
-    except Exception as e:
-        logging.error(f"Failed to summarize commit logs: {e}")
-        return "Summary unavailable."
 
 @app.command()
 def main(
-    directories: List[str] = typer.Argument(..., help="Directories to search for Git repositories."),
-    authors: List[str] = typer.Option(None, "--author", "-a", help="Filter commits by author names (can specify multiple)."),
-    summarize: bool = typer.Option(False, "--summarize", "-s", help="Summarize the extracted commit logs using OpenAI."),
+    repository: str = typer.Argument(..., help="Path to the Git repository."),
+    authors: list[str] = typer.Option(
+        None,
+        "--author",
+        "-a",
+        help="Filter commits by author names (can specify multiple).",
+    ),
+    summarise: bool = typer.Option(
+        False,
+        "--summarise",
+        "-s",
+        help="Summarise the extracted commit logs using OpenAI.",
+    ),
 ):
     """
-    Extract commit logs from Git repositories in the given directories and optionally summarize them.
+    Extract commit logs from the specified Git repository and optionally summarise them.
     """
-    repositories = process_directories(directories, authors)
+    repo_path = repository
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        typer.echo(
+            f"The directory '{repo_path}' does not appear to be a Git repository."
+        )
+        raise typer.Exit()
 
-    # Set up file organization under a dedicated directory (commit_reports).
-    base_dir = os.path.join(os.getcwd(), "commit_reports")
+    try:
+        commits = extract_commits(repo_path, authors)
+    except Exception as e:
+        typer.echo(f"Error extracting commits: {e}")
+        raise typer.Exit()
+
+    repository_obj = Repository(path=repo_path, commits=commits)
+    repo_name = os.path.basename(os.path.abspath(repo_path))
+
+    # Define the base output directory: commit_reports/<repo_name>
+    base_dir = os.path.join(os.getcwd(), settings.base_output_dir, repo_name)
     os.makedirs(base_dir, exist_ok=True)
 
-    # Get current timestamp for unique run identification.
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Create a unique run directory that includes the repo name and a
+    # human-readable timestamp.
+    run_dir, timestamp = create_run_directory(base_dir, repo_name)
 
-    # Create a unique run directory under base_dir with timestamp and model info.
-    run_dir = os.path.join(base_dir, f"run_{timestamp}_{MODEL_USED}")
-    os.makedirs(run_dir, exist_ok=True)
+    # Construct commit info content.
+    commit_info_content = f"Repository: {repo_path}\n"
+    for commit in repository_obj.commits:
+        commit_info_content += (
+            f"{commit.commit_hash} | {commit.author} "
+            f"| {commit.date} | {commit.message}\n"
+        )
+    commit_info_content += "\n"
 
-    # Construct output file names.
-    commit_info_file = os.path.join(run_dir, f"commit_info_{timestamp}_{MODEL_USED}.txt")
-    commit_summary_file = os.path.join(run_dir, f"commit_summary_{timestamp}_{MODEL_USED}.txt")
-
-    # Write commit details to the commit_info file with metadata header.
-    with open(commit_info_file, "w") as f:
-        f.write(f"Timestamp: {timestamp}\n")
-        f.write(f"Model Used: {MODEL_USED}\n")
-        f.write("Prompt Used:\n")
-        f.write(PROMPT_USED_FOR_OUTPUT + "\n")
-        f.write("=" * 80 + "\n\n")
-        for repo in repositories:
-            f.write(f"Repository: {repo.path}\n")
-            for commit in repo.commits:
-                f.write(f"{commit.commit_hash} | {commit.author} | {commit.date} | {commit.message}\n")
-            f.write("\n")
+    # Define commit info file name (without model details).
+    commit_info_file = os.path.join(run_dir, f"commit_info_{timestamp}_{repo_name}.txt")
+    header_info = f"Timestamp: {timestamp}\n" + "=" * 80 + "\n\n"
+    write_file_with_metadata(commit_info_file, header_info, commit_info_content)
     logging.info(f"Commit logs written to {commit_info_file}")
 
-    # If summarization is requested, process the commit text and write the summary file.
-    if summarize:
-        commit_text = ""
-        for repo in repositories:
-            commit_text += f"Repository: {repo.path}\n"
-            for commit in repo.commits:
-                commit_text += f"{commit.commit_hash} | {commit.author} | {commit.date} | {commit.message}\n"
-            commit_text += "\n"
-        summary = summarize_commits(commit_text)
-        with open(commit_summary_file, "w") as f:
-            f.write(f"Timestamp: {timestamp}\n")
-            f.write(f"Model Used: {MODEL_USED}\n")
-            f.write("Prompt Used:\n")
-            f.write(PROMPT_USED_FOR_OUTPUT + "\n")
-            f.write("=" * 80 + "\n\n")
-            f.write(summary)
+    if summarise:
+        commit_text = commit_info_content
+        summary = summarise_commits(commit_text)
+        # Define commit summary file name (include model details).
+        commit_summary_file = os.path.join(
+            run_dir, f"commit_summary_{timestamp}_{repo_name}_{settings.model_used}.txt"
+        )
+        header_summary = (
+            f"Timestamp: {timestamp}\n"
+            f"Model Used: {settings.model_used}\n"
+            "Prompt Used:\n"
+            f"{settings.system_prompt}\n\n{settings.user_prompt}\n" + "=" * 80 + "\n\n"
+        )
+        write_file_with_metadata(commit_summary_file, header_summary, summary)
         logging.info(f"Commit summary written to {commit_summary_file}")
+
 
 if __name__ == "__main__":
     app()
