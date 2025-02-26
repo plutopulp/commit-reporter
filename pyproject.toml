@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "commit_digest"
+name = "commit_reporter"
 version = "0.1.0"
 description = "Extract commit info from Git repositories and optionally summarize them using OpenAI."
 authors = ["plutopulp <plutopulped@gmail.com>"]

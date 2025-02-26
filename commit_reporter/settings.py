@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     openai_api_key: str
     model_used: str = "gpt-4-turbo"
-    base_output_dir: str = "commit_reports"
+    base_output_dir: str = "reports"
     system_prompt: str = (
         "You are an expert software engineer and technical communicator. "
         "Your task is to analyse a series of git commit logs "

@@ -47,7 +47,7 @@ def main(
     repository_obj = Repository(path=repo_path, commits=commits)
     repo_name = os.path.basename(os.path.abspath(repo_path))
 
-    # Define the base output directory: commit_reports/<repo_name>
+    # Define the base output directory: reports/<repo_name>
     base_dir = os.path.join(os.getcwd(), settings.base_output_dir, repo_name)
     os.makedirs(base_dir, exist_ok=True)
 
