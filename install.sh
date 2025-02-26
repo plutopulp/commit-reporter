@@ -1,8 +1,3 @@
----
-
-**install.sh**
-
-```bash
 #!/bin/bash
 # install.sh - Install Commit Reporter CLI
 # This script checks for Poetry, creates a default .env file at the project root if needed,
